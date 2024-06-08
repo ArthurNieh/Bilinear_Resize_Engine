@@ -18,23 +18,165 @@ reg [5:0] reg_V0, reg_V0_next;
 reg [3:0] reg_SW, reg_SW_next;
 reg [3:0] reg_SH, reg_SH_next;
 
-reg [5:0] X_lower, X_lower_next; 
-reg [5:0] X_upper, X_upper_next;
-reg [5:0] Y_lower, Y_lower_next;
-reg [5:0] Y_upper, Y_upper_next;
+reg [11:0] reg_ADDR, reg_ADDR_next;
+reg        output_valid, output_valid_next;
+reg        done, done_next; // active low: 0 means done
+assign ADDR = reg_ADDR;
+assign REN = 1'b0;
+assign O_VALID = output_valid;
+// assign O_DATA = output_data;
+
 reg [9:0] width_sum, width_sum_next;
 reg [9:0] height_sum, height_sum_next;
+reg [5:0] X_lower, X_lower_prev;
+reg [5:0] X_upper, X_upper_prev;
+reg [5:0] Y_lower, Y_lower_prev;
+reg [5:0] Y_upper, Y_upper_prev;
+reg [5:0] last_y_row, last_y_row_next; // keep the last y row for FSM
+reg x_divide, y_divide, x_divide_next, y_divide_next;
 
-reg [11:0] reg_ADDR, reg_ADDR_next;
-reg       reg_REN, reg_REN_next;
-assign ADDR = reg_ADDR;
-assign REN = reg_REN;
+wire [5:0] next_X_lower, next_X_upper, next_Y_lower, next_Y_upper;
+assign next_X_lower = width_sum_next[9:4];
+assign next_X_upper = (width_sum_next[3:0] == 0) ? width_sum_next[9:4] : width_sum_next[9:4] + 1;
+assign next_Y_lower = height_sum_next[9:4];
+assign next_Y_upper = (height_sum_next[3:0] == 0) ? height_sum_next[9:4] : height_sum_next[9:4] + 1;
 
-reg right_ready, right_ready_next;
-wire x_same_left, x_left_right;
-assign x_same_left = (X_lower_next == X_lower); // next left == left
-assign x_left_right = (X_lower_next == X_upper);// next left == right
+reg [3:0] x_ratio, x_ratio_next; // keep the ration of x insertion
+reg [3:0] y_ratio, y_ratio_next; // keep the ration of y insertion
+wire [7:0] left_margin, right_margin;
 
+reg [7:0] data_y_lower [0:1];
+reg [7:0] data_y_lower_next [0:1];
+reg [7:0] data_y_upper [0:1];
+reg [7:0] data_y_upper_next [0:1];
+// reg [4:0] count_cycle, count_cycle_next, count_cycle_prev;
+
+// FSM for interpolation
+reg [1:0] pre_pre_state, pre_state, state, state_next;
+wire pre_pre_state_is_11, pre_pre_state_is_10, pre_pre_state_is_01, pre_pre_state_is_00;
+assign pre_pre_state_is_11 = pre_pre_state[1] & pre_pre_state[1];
+assign pre_pre_state_is_00 = ~pre_pre_state[1] & ~pre_pre_state[0];
+// wire init;
+// assign init = (pre_state == 2'b00) & (state == 2'b00);
+
+// Sub modules
+    Cal_Interpolation cal_inter_left (
+        .DATA_1(data_y_lower[0]),
+        .DATA_2(data_y_upper[0]),
+        .ratio(y_ratio),
+        .Out_DATA(left_margin)
+    );
+    Cal_Interpolation cal_inter_right (
+        .DATA_1(data_y_lower[1]),
+        .DATA_2(data_y_upper[1]),
+        .ratio(y_ratio),
+        .Out_DATA(right_margin)
+    );
+    Cal_Interpolation cal_inter (
+        .DATA_1(left_margin),
+        .DATA_2(right_margin),
+        .ratio(x_ratio),
+        .Out_DATA(O_DATA)
+    );
+
+always @(*)begin
+    if(START) begin
+        // count_cycle_next = count_cycle;
+        state_next = 2'b00;
+    end
+    else begin
+        // count_cycle_next = count_cycle;
+        case(state)
+            2'b00: begin
+                if(y_divide_next | x_divide_next) begin
+                    state_next = 2'b11;
+                end
+                else begin
+                    state_next = 2'b01;
+                end
+            end
+            2'b01: begin
+                state_next = 2'b10;
+            end
+            2'b10: begin
+                state_next = 2'b11;
+            end
+            2'b11: begin
+                // count_cycle_next = (count_cycle == 5'd16) ? 0 : count_cycle + 1; // not yet consider y
+                if(X_lower == next_X_lower) begin
+                    state_next = (X_upper == next_X_upper) ? 2'b11 : 2'b01;
+                end
+                else if(X_upper == next_X_lower) begin
+                    state_next = 2'b10;
+                end
+                else begin
+                    state_next = 2'b00;
+                end
+            end
+        endcase
+    end
+end
+always @(*)begin
+    // state: current reading address
+    case(state)
+        2'b00: begin
+            reg_ADDR_next = {X_lower, Y_lower};
+        end
+        2'b01: begin
+            reg_ADDR_next = {X_upper, Y_lower};
+        end
+        2'b10: begin
+            reg_ADDR_next = {X_lower, Y_upper};
+        end
+        2'b11: begin
+            reg_ADDR_next = {X_upper, Y_upper};
+        end
+    endcase
+    // output_data_next = (state == 2'b11) ? data_y_lower[0] : 0;
+    output_valid_next = pre_state[1] & pre_state[0];
+end
+// save ROM data to local memory
+always @(*)begin
+    // data_y_lower_next = data_y_lower;
+    // data_y_upper_next = data_y_upper;
+    case(pre_state)
+        2'b00: begin
+            data_y_lower_next[0] = R_DATA;
+            data_y_lower_next[1] = x_divide ? R_DATA : data_y_lower[1];
+            data_y_upper_next[0] = y_divide ? R_DATA : data_y_upper[0];
+            
+            data_y_upper_next[1] = data_y_upper[1];
+        end
+        2'b01: begin
+            data_y_upper_next[0] = R_DATA;
+            // if pre_pre_state is 11, then
+            // data_y_lower_next[0] == data_y_lower[0];
+            data_y_lower_next[0] = data_y_lower[0];
+            data_y_lower_next[1] = data_y_lower[1];
+            data_y_upper_next[1] = data_y_upper[1];
+        end
+        2'b10: begin
+            data_y_lower_next[1] = R_DATA;
+            data_y_lower_next[0] = pre_pre_state_is_11 ? data_y_lower[1] : data_y_lower[0];
+            data_y_upper_next[0] = pre_pre_state_is_11 ? data_y_upper[1] : data_y_lower[0];
+
+            data_y_upper_next[1] = data_y_upper[1];
+        end
+        2'b11: begin
+            data_y_upper_next[1] = R_DATA;
+            if(pre_pre_state_is_00) begin
+                data_y_lower_next[1] = y_divide ? R_DATA : data_y_lower[1];
+                data_y_upper_next[0] = x_divide ? R_DATA : data_y_upper[0];
+            end
+            else begin
+                data_y_lower_next[1] = data_y_lower[1];
+                data_y_upper_next[0] = data_y_upper[0];
+            end
+            data_y_lower_next[0] = data_y_lower[0];
+        end
+    endcase
+end
+// save initial input data
 always @(*)begin
     if(START) begin
         reg_H0_next = H0;
@@ -49,69 +191,75 @@ always @(*)begin
         reg_SH_next = reg_SH;
     end
 end
-
+// calculate upper and lower bound of X and Y for each interpolation
 always @(*)begin
-    if(width_sum[9:4] == SW) begin
-        width_sum_next = 0;
-        height_sum_next = height_sum + SH;
+    if(state == 2'b11) begin
+        if(width_sum[9:4] == reg_SW_next) begin
+            width_sum_next = 0;
+            height_sum_next = height_sum + reg_SH_next;
+        end
+        else begin
+            width_sum_next = width_sum + reg_SW_next;
+            height_sum_next = height_sum;
+        end
     end
     else begin
-        width_sum_next = width_sum + SW;
+        width_sum_next = width_sum;
         height_sum_next = height_sum;
     end
-end
+    x_divide_next = (width_sum[3:0] == 0);
+    y_divide_next = (height_sum[3:0] == 0);
+    // To Be Check
+    x_ratio_next = width_sum[3:0];
+    y_ratio_next = height_sum[3:0];
 
-always @(*)begin
-    X_lower_next = width_sum[9:4];
-    X_upper_next = (width_sum[3:0] == 0) ? width_sum[9:4] : width_sum[9:4] + 1;
-    Y_lower_next = height_sum[9:4];
-    Y_upper_next = (height_sum[3:0] == 0) ? height_sum[9:4] : height_sum[9:4] + 1;
-end
+    X_lower = width_sum[9:4];
+    X_upper = x_divide_next ? width_sum[9:4] : width_sum[9:4] + 1;
+    Y_lower = height_sum[9:4];
+    Y_upper = y_divide_next ? height_sum[9:4] : height_sum[9:4] + 1;
 
-always @(*)begin
-    case ({x_same_left, x_left_right})
-        2'b11: begin // current left right are the same
-            reg_ADDR_next = {X_upper_next, Y_lower_next};
-            reg_REN_next = 0;       // read right margin of next vertex
-            right_ready_next = 1;   // ready to read right margin of next vertex
-        end
-        2'b10: begin // fall into the same block as last one
-            reg_ADDR_next = reg_ADDR;
-            reg_REN_next = 1;       // don't need to read
-            right_ready_next = 1;   // right margin of next vertex is ready
-        end
-        2'b01: begin // next left == current right
-            reg_ADDR_next = {X_upper_next, Y_lower_next};
-            reg_REN_next = 0;       // read right margin of next vertex
-            right_ready_next = 1;   // ready to read right margin of next vertex
-        end
-        2'b00: begin // next left > current right
-            reg_ADDR_next = {X_lower_next, Y_lower_next};
-            reg_REN_next = 0;       // read left margin of next vertex
-            right_ready_next = 0;   // not ready to read right margin of next vertex
-        end
-        default: 
-    endcase
-        
+    if(height_sum[9:4] == reg_V0_next) begin
+        done_next = 0;
     end
-    
+    else begin
+        done_next = 1;
+    end
 end
+
+always @(negedge clk) begin
+    reg_ADDR <= reg_ADDR_next;
+    data_y_lower[0] <= data_y_lower_next[0];
+    data_y_lower[1] <= data_y_lower_next[1];
+    data_y_upper[0] <= data_y_upper_next[0];
+    data_y_upper[1] <= data_y_upper_next[1];
+    
+    output_valid <= output_valid_next;
+end
+
 always @(posedge clk) begin
-    if(RST or START) begin
+    if(RST | START) begin
         width_sum <= 0;
         height_sum <= 0;
-        X_lower <= 0;
-        X_upper <= 0;
-        Y_lower <= 0;
-        Y_upper <= 0;
+        state <= 2'b00;
+        pre_state <= 2'b00;
+        pre_pre_state <= 2'b00;
+        x_divide <= 0;
+        y_divide <= 0;
+        x_ratio <= 0;
+        y_ratio <= 0;
+        done <= 1;
     end
     else begin
         width_sum <= width_sum_next;
         height_sum <= height_sum_next;
-        X_lower <= X_lower_next;
-        X_upper <= X_upper_next;
-        Y_lower <= Y_lower_next;
-        Y_upper <= Y_upper_next;
+        state <= state_next;
+        pre_state <= state;
+        pre_pre_state <= pre_state;
+        x_divide <= x_divide_next;
+        y_divide <= y_divide_next;
+        x_ratio <= x_ratio_next;
+        y_ratio <= y_ratio_next;
+        done <= done_next;
     end
     reg_H0 <= reg_H0_next;
     reg_V0 <= reg_V0_next;
@@ -119,4 +267,31 @@ always @(posedge clk) begin
     reg_SH <= reg_SH_next;
 end
 
+endmodule
+
+module Cal_Interpolation (
+    input   [7:0]   DATA_1,
+    input   [7:0]   DATA_2,
+    input   [3:0]   ratio,
+    output  [7:0]   Out_DATA
+);
+    reg [3:0] flip_ratio;
+    wire [7:0] d1_3, d1_2, d1_1, d1_0, d2_3, d2_2, d2_1, d2_0;
+    wire [11:0] output_inter;
+    
+    assign d1_3 = {8{ratio[3]}} & DATA_1;
+    assign d1_2 = {8{ratio[2]}} & DATA_1;
+    assign d1_1 = {8{ratio[1]}} & DATA_1;
+    assign d1_0 = {8{ratio[0]}} & DATA_1;
+    assign d2_3 = {8{flip_ratio[3]}} & DATA_2;
+    assign d2_2 = {8{flip_ratio[2]}} & DATA_2;
+    assign d2_1 = {8{flip_ratio[1]}} & DATA_2;
+    assign d2_0 = {8{flip_ratio[0]}} & DATA_2;
+    assign output_inter = {d1_3, 3'b000} + {d1_2, 2'b00} + {d1_1, 1'b0} + d1_0 
+                        + {d2_3, 3'b000} + {d2_2, 2'b00} + {d2_1, 1'b0} + d2_0 ;
+    assign Out_DATA = output_inter[11:4];
+
+    always @(*)begin
+        flip_ratio = ~ratio[3:0] + 1;
+    end
 endmodule
