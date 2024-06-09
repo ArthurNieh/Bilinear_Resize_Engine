@@ -24,7 +24,6 @@ reg        done, done_next; // active low: 0 means done
 assign ADDR = reg_ADDR;
 assign REN = 1'b0;
 assign O_VALID = output_valid;
-// assign O_DATA = output_data;
 
 reg [9:0] width_sum, width_sum_next;
 reg [9:0] height_sum, height_sum_next;
@@ -35,7 +34,6 @@ assign X_lower = width_sum[9:4];
 assign X_upper = x_divide_next ? width_sum[9:4] : width_sum[9:4] + 1;
 assign Y_lower = height_sum[9:4];
 assign Y_upper = y_divide_next ? height_sum[9:4] : height_sum[9:4] + 1;
-
 
 wire [5:0] next_X_lower, next_X_upper, next_Y_lower, next_Y_upper;
 assign next_X_lower = width_sum_next[9:4];
@@ -58,8 +56,6 @@ reg [1:0] pre_pre_state, pre_state, state, state_next;
 wire pre_pre_state_is_11, pre_pre_state_is_10, pre_pre_state_is_01, pre_pre_state_is_00;
 assign pre_pre_state_is_11 = pre_pre_state[1] & pre_pre_state[1];
 assign pre_pre_state_is_00 = ~pre_pre_state[1] & ~pre_pre_state[0];
-// wire init;
-// assign init = (pre_state == 2'b00) & (state == 2'b00);
 wire [5:0] x_ADDR, y_ADDR;
 assign x_ADDR = state[1] ? X_upper : X_lower;
 assign y_ADDR = state[0] ? Y_upper : Y_lower;
@@ -128,13 +124,10 @@ always @(*)begin
             data_y_lower_next[0] = R_DATA;
             data_y_lower_next[1] = x_divide ? R_DATA : data_y_lower[1];
             data_y_upper_next[0] = y_divide ? R_DATA : data_y_upper[0];
-            
             data_y_upper_next[1] = data_y_upper[1];
         end
         2'b01: begin
             data_y_upper_next[0] = R_DATA;
-            // if pre_pre_state is 11, then
-            // data_y_lower_next[0] == data_y_lower[0];
             data_y_lower_next[0] = data_y_lower[0];
             data_y_lower_next[1] = data_y_lower[1];
             data_y_upper_next[1] = data_y_upper[1];
@@ -143,19 +136,12 @@ always @(*)begin
             data_y_lower_next[1] = R_DATA;
             data_y_lower_next[0] = pre_pre_state_is_11 ? data_y_lower[1] : data_y_lower[0]; //x_divide ? R_DATA : 
             data_y_upper_next[0] = pre_pre_state_is_11 ? data_y_upper[1] : data_y_upper[0];
-
             data_y_upper_next[1] = data_y_upper[1];
         end
         2'b11: begin
             data_y_upper_next[1] = R_DATA;
-            // if(pre_pre_state_is_00) begin
             data_y_lower_next[1] = y_divide ? R_DATA : data_y_lower[1];
             data_y_upper_next[0] = x_divide ? R_DATA : data_y_upper[0];
-            // end
-            // else begin
-            //     data_y_lower_next[1] = data_y_lower[1];
-            //     data_y_upper_next[0] = data_y_upper[0];
-            // end
             data_y_lower_next[0] = y_divide ? data_y_upper[0] :
                                     x_divide ? data_y_lower[1] : data_y_lower[0];
         end
@@ -194,7 +180,7 @@ always @(*)begin
     end
     x_divide_next = (width_sum[3:0] == 0);
     y_divide_next = (height_sum[3:0] == 0);
-    // To Be Check
+
     x_ratio_next = width_sum[3:0];
     y_ratio_next = height_sum[3:0];
 
